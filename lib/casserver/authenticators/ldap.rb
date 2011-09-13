@@ -60,6 +60,7 @@ class CASServer::Authenticators::LDAP < CASServer::Authenticators::Base
     rescue Net::LDAP::LdapError => e
       raise CASServer::AuthenticatorError,
         "LDAP authentication failed with '#{e}'. Check your authenticator configuration."
+    
     end
   end
 
@@ -93,13 +94,19 @@ class CASServer::Authenticators::LDAP < CASServer::Authenticators::Base
     # using the CN, so having just the username is not enough. We connect as auth_user,
     # and then try to find the target user's CN based on the given username. Then we bind
     # as the target user to validate their credentials.
+    #
+    # If binding no sucsess return false. For multiple ldap storage.
     def bind_by_username_with_preauthentication
       raise CASServer::AuthenticatorError, "A password must be specified in the configuration for the authenticator user!" unless
         @options[:ldap][:auth_password]
-
-      @ldap.authenticate(@options[:ldap][:auth_user], @options[:ldap][:auth_password])
-
-      @ldap.bind_as(:base => @options[:ldap][:base], :password => @password, :filter => user_filter)
+      begin 
+        @ldap.authenticate(@options[:ldap][:auth_user], @options[:ldap][:auth_password])
+        @ldap.bind_as(:base => @options[:ldap][:base], :password => @password, :filter => user_filter)
+      rescue => e
+         $LOG.warn("WARRN: Can't connect to " + @options[:ldap][:host].to_s + ": " + e.to_s)
+         return false
+      end
+ 
     end
 
     # Combine the filter for finding the user with the optional extra filter specified in the config
