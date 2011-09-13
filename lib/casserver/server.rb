@@ -2,6 +2,7 @@ require 'sinatra/base'
 require 'casserver/localization'
 require 'casserver/utils'
 require 'casserver/cas'
+require "thread"
 
 require 'logger'
 $LOG ||= Logger.new(STDOUT)
@@ -431,30 +432,40 @@ module CASServer
       credentials_are_valid = false
       extra_attributes = {}
       successful_authenticator = nil
+
       begin
         auth_index = 0
-        settings.auth.each do |auth_class|
-          auth = auth_class.new
+        threads = []
+         settings.auth.each do |auth_class|
 
-          auth_config = settings.config[:authenticator][auth_index]
-          # pass the authenticator index to the configuration hash in case the authenticator needs to know
-          # it splace in the authenticator queue
-          auth.configure(auth_config.merge('auth_index' => auth_index))
+          threads << Thread.new(auth_class, auth_index) do |private_auth_class, index|
+            auth = private_auth_class.new
+            auth_config = settings.config[:authenticator][index]
+            auth.configure(auth_config.merge('auth_index' => index))
+            private_credentials_are_valid = auth.validate(
+              :username => @username,
+              :password => @password,
+              :service => @service,
+              :request => @env
+            )
 
-          credentials_are_valid = auth.validate(
-            :username => @username,
-            :password => @password,
-            :service => @service,
-            :request => @env
-          )
-          if credentials_are_valid
-            extra_attributes.merge!(auth.extra_attributes) unless auth.extra_attributes.blank?
-            successful_authenticator = auth
-            break
+            if private_credentials_are_valid
+              extra_attributes.merge!(auth.extra_attributes) unless auth.extra_attributes.blank?
+              successful_authenticator = auth
+              credentials_are_valid = private_credentials_are_valid
+              break
+            end
+
+            Thread.exit
+
           end
+           auth_index += 1
 
-          auth_index += 1
+
         end
+        
+         threads.each { |t| t.join if t != Thread.current } 
+        
         
         if credentials_are_valid
           $LOG.info("Credentials for username '#{@username}' successfully validated using #{successful_authenticator.class.name}.")
